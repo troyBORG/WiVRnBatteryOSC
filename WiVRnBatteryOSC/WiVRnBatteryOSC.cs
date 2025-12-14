@@ -23,9 +23,6 @@ public class WiVRnBatteryOSC : ResoniteMod
     public static ModConfigurationKey<bool> ShowDebugInfo = new("ShowDebugInfo", "Show debug information in logs", () => true);
     
     [AutoRegisterConfigKey]
-    public static ModConfigurationKey<bool> ShowUIPanel = new("ShowUIPanel", "Show in-game UI panel with battery status", () => true);
-    
-    [AutoRegisterConfigKey]
     public static ModConfigurationKey<float> UpdateInterval = new("UpdateInterval", "Battery query interval in seconds", () => 2.0f);
     
     [AutoRegisterConfigKey]
@@ -53,7 +50,7 @@ public class WiVRnBatteryOSC : ResoniteMod
         
         // Load configuration
         var config = GetConfiguration();
-        Msg($"Configuration - ShowDebugInfo: {config.GetValue(ShowDebugInfo)}, ShowUIPanel: {config.GetValue(ShowUIPanel)}, UpdateInterval: {config.GetValue(UpdateInterval)}s");
+        Msg($"Configuration - ShowDebugInfo: {config.GetValue(ShowDebugInfo)}, UpdateInterval: {config.GetValue(UpdateInterval)}s");
         
         // Start battery query task
         StartBatteryQuery();
@@ -274,8 +271,8 @@ public class WiVRnBatteryOSC : ResoniteMod
         Msg("WiVRn Battery Direct Mod shutdown");
     }
 
-    // Harmony patch to ensure battery is updated correctly
-    // This patches HandleHeadsetState to inject battery data
+    // Harmony patch to log what the renderer is providing and potentially inject battery data
+    // This patches HandleHeadsetState to see what battery data comes from the renderer
     [HarmonyPatch(typeof(VR_Manager), "HandleHeadsetState")]
     class VR_Manager_HandleHeadsetState_Patch
     {
@@ -284,9 +281,18 @@ public class WiVRnBatteryOSC : ResoniteMod
             // Get mod instance
             if (instance == null) return;
 
+            // Log what the renderer is providing (every 20 calls to avoid spam)
+            // Note: The renderer is providing -1, which means WiVRn isn't sending battery data
+            // This is logged in the main query loop, so we don't need to log here
+            
+            // The renderer is providing -1, which means WiVRn isn't sending battery data
+            // We can't inject fake data, but we can log that we see the issue
+            // The real fix needs to be in WiVRn server or the renderer querying battery
+            
             var batteryState = instance.GetBatteryState();
             
-            // Only update if we have valid battery data
+            // Only update if we have valid battery data from our query
+            // But since we're also getting -1, this won't help until WiVRn provides data
             if (batteryState.present && batteryState.level >= 0f && batteryState.level <= 1f)
             {
                 try
