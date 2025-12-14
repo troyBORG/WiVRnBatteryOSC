@@ -15,11 +15,11 @@ namespace WiVRnBatteryOSC;
 // Based on: https://github.com/resonite-modding-group/ExampleMod
 public class WiVRnBatteryOSC : ResoniteMod
 {
-    internal const string VERSION_CONSTANT = "1.0.0";
+    internal const string VERSION_CONSTANT = "0.0.1";
     public override string Name => "WiVRn Battery OSC";
-    public override string Author => "WiVRn Community";
+    public override string Author => "troyBORG";
     public override string Version => VERSION_CONSTANT;
-    public override string Link => "https://github.com/resonite-modding-group/ExampleMod/";
+    public override string Link => "https://github.com/troyBORG/WiVRnBatteryOSC";
 
     private UdpClient? udpClient;
     private CancellationTokenSource? cancellationTokenSource;
