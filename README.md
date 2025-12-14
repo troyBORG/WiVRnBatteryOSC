@@ -34,11 +34,13 @@ Resonite queries battery from OpenXR, but OpenXR doesn't expose battery via a st
 ## Features
 
 - ✅ Direct battery query from OpenXR/VR_Manager
+- ✅ **External service support** - Reads battery from `/tmp/wivrn-battery.json` (bypasses xrizer!)
 - ✅ Automatic background polling (configurable interval, default 2 seconds)
+- ✅ Automatic fallback - tries external service, then renderer query
 - ✅ Controller battery logging (for debugging)
 - ✅ Headset battery logging (for debugging)
 - ✅ Configurable debug logging
-- ✅ No external dependencies
+- ✅ No external dependencies (for mod itself)
 - ✅ Harmony patch to ensure battery data flows through
 - ✅ Simple installation - just drop the DLL in rml_mods
 
@@ -49,6 +51,7 @@ The mod includes in-game configuration options (accessible via Resonite's mod se
 - **ShowDebugInfo** (default: `true`) - Enable detailed battery logging
 - **UpdateInterval** (default: `2.0` seconds) - How often to query battery status
 - **ForceUpdate** (default: `false`) - Force update battery values even if renderer provides them
+- **UseExternalService** (default: `true`) - Try to read battery from external service file (`/tmp/wivrn-battery.json`)
 
 ## Building
 
@@ -61,14 +64,18 @@ The DLL will be automatically copied to your Resonite `rml_mods` folder if `Copy
 
 ## Known Limitations
 
-### Headset Battery (Linux)
-**Issue**: Headset battery shows `-1` (not available) on Linux systems.
+### Headset Battery (Steam/xrizer)
+**Issue**: Headset battery shows `-1` (not available) in games running through Steam.
 
-**Root Cause**: WiVRn only sends headset battery data on Android (`#ifdef __ANDROID__`). On Linux, the battery sending code is never executed.
+**Root Cause**: **WiVRn correctly forwards battery to the server** (visible in `wlx-overlay-s` watch), but **xrizer** (the OpenXR runtime wrapper for Steam) does not forward this data to games.
 
-**Status**: This is a WiVRn limitation, not a mod limitation. The mod correctly reads what the renderer provides, but WiVRn isn't sending battery data on Linux.
+**Why**: There is no standard OpenXR API for battery status. Monado provides it through the `libmonado` interface (`xrt_device::get_battery_status()`), but this interface is not accessible inside Steam's pressure vessel sandbox.
 
-**Solution**: Requires implementing Linux battery support in WiVRn client (see `BATTERY_INVESTIGATION.md` for details).
+**Status**: This is an xrizer/Steam limitation, not a WiVRn or mod limitation. The mod correctly reads what the renderer provides, but xrizer doesn't expose battery data to games.
+
+**Solution**: 
+- **Workaround Available**: Use the external battery service (see `EXTERNAL_SERVICE_README.md`) - this bypasses xrizer entirely!
+- **Long-term**: Tracked in [Supreeeme/xrizer#229](https://github.com/Supreeeme/xrizer/issues/229) - requires xrizer to integrate `libmonado` to forward battery status. See `BATTERY_INVESTIGATION.md` for details.
 
 ### Controller Battery (Quest Pro)
 **Issue**: Quest Pro controllers don't expose battery via OpenXR extensions.
@@ -80,6 +87,13 @@ The DLL will be automatically copied to your Resonite `rml_mods` folder if `Copy
 **Note**: The mod includes controller battery logging to help verify what data (if any) is available from your controllers.
 
 ## Version History
+
+### v0.2.0
+- **Added external service support**: Mod can now read battery from `/tmp/wivrn-battery.json`
+- **Bypasses xrizer limitation**: External C++ service queries WiVRn/Monado directly
+- **Automatic fallback**: Tries external service first, falls back to renderer query
+- **New config option**: `UseExternalService` to enable/disable external service reading
+- See `EXTERNAL_SERVICE_README.md` for details on the external service
 
 ### v0.1.2
 - Added controller battery logging
@@ -100,6 +114,8 @@ The DLL will be automatically copied to your Resonite `rml_mods` folder if `Copy
 ## Documentation
 
 - **[BATTERY_INVESTIGATION.md](BATTERY_INVESTIGATION.md)** - Detailed investigation of battery data flow, Linux/Android differences, and Quest Pro limitations
+- **[EXTERNAL_SERVICE_README.md](EXTERNAL_SERVICE_README.md)** - How to use the external battery service to bypass xrizer limitation
+- **[WORKAROUND_PROPOSAL.md](WORKAROUND_PROPOSAL.md)** - Architecture and implementation details of the external service workaround
 
 ## Credits
 

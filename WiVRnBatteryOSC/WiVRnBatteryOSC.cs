@@ -2,6 +2,8 @@ using FrooxEngine;
 using HarmonyLib;
 using ResoniteModLoader;
 using System;
+using System.IO;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Reflection;
@@ -12,7 +14,7 @@ namespace WiVRnBatteryOSC;
 // Mod to query battery status directly from OpenXR/WiVRn and update Resonite's battery display
 public class WiVRnBatteryOSC : ResoniteMod
 {
-    internal const string VERSION_CONSTANT = "0.1.2";
+    internal const string VERSION_CONSTANT = "0.2.0"; // Added external service support
     public override string Name => "WiVRn Battery Direct";
     public override string Author => "troyBORG";
     public override string Version => VERSION_CONSTANT;
@@ -27,6 +29,9 @@ public class WiVRnBatteryOSC : ResoniteMod
     
     [AutoRegisterConfigKey]
     public static ModConfigurationKey<bool> ForceUpdate = new("ForceUpdate", "Force update battery values even if renderer provides them", () => false);
+    
+    [AutoRegisterConfigKey]
+    public static ModConfigurationKey<bool> UseExternalService = new("UseExternalService", "Try to read battery from external service file (/tmp/wivrn-battery.json)", () => true);
 
     private Task? batteryQueryTask;
     private CancellationTokenSource? cancellationTokenSource;
@@ -90,7 +95,19 @@ public class WiVRnBatteryOSC : ResoniteMod
             try
             {
                 queryCount++;
-                QueryBatteryFromRenderer();
+                
+                // Try external service first (bypasses xrizer)
+                bool externalSuccess = false;
+                if (GetConfiguration().GetValue(UseExternalService))
+                {
+                    externalSuccess = QueryBatteryFromExternalService();
+                }
+                
+                // Fallback to renderer query if external service didn't work
+                if (!externalSuccess)
+                {
+                    QueryBatteryFromRenderer();
+                }
                 
                 // Wait before next query
                 Thread.Sleep(intervalMs);
@@ -104,6 +121,107 @@ public class WiVRnBatteryOSC : ResoniteMod
                 }
                 Thread.Sleep(intervalMs);
             }
+        }
+    }
+
+    private bool QueryBatteryFromExternalService()
+    {
+        try
+        {
+            // Try to read battery data from external service file
+            // This file is written by a C++ service that queries WiVRn/Monado directly
+            // Location: /tmp/wivrn-battery.json
+            string batteryFile = "/tmp/wivrn-battery.json";
+            
+            if (!File.Exists(batteryFile))
+            {
+                // File doesn't exist - external service not running
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 50 == 0)
+                {
+                    Msg("External battery service not available (file not found). Using renderer query.");
+                }
+                return false;
+            }
+            
+            // Read and parse JSON
+            string jsonContent = File.ReadAllText(batteryFile);
+            using (JsonDocument doc = JsonDocument.Parse(jsonContent))
+            {
+                JsonElement root = doc.RootElement;
+                
+                if (root.TryGetProperty("present", out JsonElement presentElem) && presentElem.GetBoolean())
+                {
+                    if (root.TryGetProperty("charge", out JsonElement chargeElem))
+                    {
+                        float charge = chargeElem.GetSingle();
+                        bool charging = root.TryGetProperty("charging", out JsonElement chargingElem) && chargingElem.GetBoolean();
+                        
+                        if (charge >= 0f && charge <= 1f)
+                        {
+                            lastBatteryLevel = charge;
+                            lastBatteryCharging = charging;
+                            batteryPresent = true;
+                            lastUpdateTime = DateTime.Now;
+                            lastError = "";
+                            lastStatusMessage = $"Battery (external): {charge * 100:F1}%, Charging: {charging}";
+                            
+                            if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                            {
+                                Msg($"✓ {lastStatusMessage}");
+                            }
+                            
+                            // Update headset battery
+                            UpdateHeadsetBattery(charge, charging);
+                            
+                            return true;
+                        }
+                    }
+                }
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 50 == 0)
+            {
+                Warn($"Failed to read external battery service: {ex.Message}");
+            }
+            return false;
+        }
+    }
+    
+    private void UpdateHeadsetBattery(float level, bool charging)
+    {
+        try
+        {
+            var engineType = typeof(Engine);
+            var currentProperty = engineType.GetProperty("Current", BindingFlags.Public | BindingFlags.Static);
+            if (currentProperty == null) return;
+            
+            var engine = currentProperty.GetValue(null) as Engine;
+            if (engine?.InputInterface == null) return;
+            
+            var inputInterfaceType = typeof(InputInterface);
+            var vrManagerField = inputInterfaceType.GetField("_vrManager", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (vrManagerField == null) return;
+            
+            var vrManager = vrManagerField.GetValue(engine.InputInterface) as VR_Manager;
+            if (vrManager == null) return;
+            
+            var vrManagerType = typeof(VR_Manager);
+            var headsetField = vrManagerType.GetField("_headset", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (headsetField == null) return;
+            
+            var headset = headsetField.GetValue(vrManager) as GeneralHeadset;
+            if (headset == null) return;
+            
+            headset.BatteryLevel.UpdateValue(level, 0.016f);
+            headset.BatteryCharging?.UpdateState(charging);
+        }
+        catch
+        {
+            // Silently handle errors
         }
     }
 
