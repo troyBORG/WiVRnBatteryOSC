@@ -1,38 +1,43 @@
-# WiVRn Battery OSC Mod
+# WiVRn Battery Direct Mod
 
-A [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader) mod that receives battery status from Edrakon via OSC and updates Resonite's battery display.
+A [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader) mod that queries battery status directly from OpenXR/WiVRn and updates Resonite's battery display.
 
-## Purpose
+## Overview
 
 Resonite queries battery from OpenXR, but OpenXR doesn't expose battery via a standard API. WiVRn implements battery via internal functions that may not be accessible to Resonite's renderer. This mod bypasses the normal OpenXR query path by:
 
-1. Listening to OSC messages from Edrakon on port 9015
-2. Receiving battery data via `/tracking/battery/headset` messages
-3. Updating Resonite's `VR_Manager` battery state directly
+1. Querying battery directly from Resonite's `VR_Manager`/renderer
+2. Using Harmony to patch `HandleHeadsetState` to ensure battery data flows through
+3. Updating Resonite's battery display automatically
 
 ## Installation
 
-1. Install [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader).
+1. Install [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader)
 2. Place `WiVRnBatteryOSC.dll` into your `rml_mods` folder:
-   - Windows: `C:\Program Files (x86)\Steam\steamapps\common\Resonite\rml_mods`
-   - Linux: `~/.local/share/Steam/steamapps/common/Resonite/rml_mods`
-3. Start Resonite. Check logs to verify the mod loaded.
+   - Linux: `~/.local/share/Steam/steamapps/common/Resonite/rml_mods/`
+   - Windows: `C:\Program Files (x86)\Steam\steamapps\common\Resonite\rml_mods\`
+3. Start Resonite - battery will be queried automatically
 
 ## Requirements
 
-- **Edrakon** must be running and sending battery data via OSC
-- OSC messages must be sent to `127.0.0.1:9015`
-- Battery messages must use format:
-  - `/tracking/battery/headset` - float (0.0 to 1.0)
-  - `/tracking/battery/headset/charging` - int (1 = charging, 0 = not)
+- **WiVRn** OpenXR runtime
+- **Resonite** with ResoniteModLoader
+- **No additional tools required** - the mod handles everything
 
 ## How It Works
 
-1. Mod starts OSC listener on port 9015
-2. Receives OSC messages from Edrakon
-3. Parses battery level and charging status
-4. Uses Harmony to patch `VR_Manager.HandleHeadsetState()`
-5. Overrides battery values from renderer state with OSC values
+1. Mod queries battery from `VR_Manager`'s headset state (which comes from OpenXR renderer)
+2. Background task polls battery every 2 seconds
+3. Harmony patch ensures battery data flows through to the display
+4. Battery level and charging status are updated automatically
+
+## Features
+
+- ✅ Direct battery query from OpenXR/VR_Manager
+- ✅ Automatic background polling (every 2 seconds)
+- ✅ No external dependencies
+- ✅ Harmony patch to ensure battery data flows through
+- ✅ Simple installation - just drop the DLL in rml_mods
 
 ## Building
 
@@ -41,15 +46,21 @@ cd WiVRnBatteryOSC
 dotnet build
 ```
 
-The DLL will be automatically copied to your Resonite `rml_mods` folder if `CopyToMods` is enabled.
+The DLL will be automatically copied to your Resonite `rml_mods` folder if `CopyToMods` is enabled in the project file.
 
-## Status
+## Version History
 
-- ✅ OSC listener implemented
-- ✅ Harmony patch to update battery state
-- ⚠️ Requires Edrakon to actually send battery data (currently placeholder)
+### v0.1.0
+- Direct battery query from OpenXR/VR_Manager
+- Removed OSC dependency
+- No external tools required
+- Automatic background polling
 
-## Related
+### v0.0.1
+- Initial release with OSC support (deprecated)
 
-- [Edrakon](https://github.com/YourEdrakonRepo) - Sends battery data via OSC
+## Credits
+
+- [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader) - Mod framework
 - [WiVRn](https://github.com/meumeu/WiVRn) - OpenXR runtime for Quest headsets
+- [HarmonyLib](https://github.com/pardeike/Harmony) - Runtime patching
