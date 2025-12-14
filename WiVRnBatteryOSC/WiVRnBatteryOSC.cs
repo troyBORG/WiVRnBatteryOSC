@@ -2,31 +2,44 @@ using FrooxEngine;
 using HarmonyLib;
 using ResoniteModLoader;
 using System;
-using System.Net;
-using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Reflection;
 using Renderite.Shared;
-using System.Runtime.InteropServices;
 
 namespace WiVRnBatteryOSC;
 
 // Mod to query battery status directly from OpenXR/WiVRn and update Resonite's battery display
-// This bypasses the need for external tools like Edrakon or bash scripts
 public class WiVRnBatteryOSC : ResoniteMod
 {
-    internal const string VERSION_CONSTANT = "0.1.0";
+    internal const string VERSION_CONSTANT = "0.1.2";
     public override string Name => "WiVRn Battery Direct";
     public override string Author => "troyBORG";
     public override string Version => VERSION_CONSTANT;
     public override string Link => "https://github.com/troyBORG/WiVRnBatteryOSC";
+
+    // Configuration
+    [AutoRegisterConfigKey]
+    public static ModConfigurationKey<bool> ShowDebugInfo = new("ShowDebugInfo", "Show debug information in logs", () => true);
+    
+    [AutoRegisterConfigKey]
+    public static ModConfigurationKey<bool> ShowUIPanel = new("ShowUIPanel", "Show in-game UI panel with battery status", () => true);
+    
+    [AutoRegisterConfigKey]
+    public static ModConfigurationKey<float> UpdateInterval = new("UpdateInterval", "Battery query interval in seconds", () => 2.0f);
+    
+    [AutoRegisterConfigKey]
+    public static ModConfigurationKey<bool> ForceUpdate = new("ForceUpdate", "Force update battery values even if renderer provides them", () => false);
 
     private Task? batteryQueryTask;
     private CancellationTokenSource? cancellationTokenSource;
     private float lastBatteryLevel = -1f;
     private bool lastBatteryCharging = false;
     private bool batteryPresent = false;
+    private int queryCount = 0;
+    private string lastStatusMessage = "Initializing...";
+    private string lastError = "";
+    private DateTime lastUpdateTime = DateTime.MinValue;
     
     // Static instance for Harmony patch to access
     private static WiVRnBatteryOSC? instance;
@@ -35,7 +48,12 @@ public class WiVRnBatteryOSC : ResoniteMod
     {
         instance = this;
         Msg("WiVRn Battery Direct Mod initialized");
+        Msg($"Version: {VERSION_CONSTANT}");
         Msg("Querying battery directly from OpenXR/WiVRn...");
+        
+        // Load configuration
+        var config = GetConfiguration();
+        Msg($"Configuration - ShowDebugInfo: {config.GetValue(ShowDebugInfo)}, ShowUIPanel: {config.GetValue(ShowUIPanel)}, UpdateInterval: {config.GetValue(UpdateInterval)}s");
         
         // Start battery query task
         StartBatteryQuery();
@@ -45,12 +63,14 @@ public class WiVRnBatteryOSC : ResoniteMod
         harmony.PatchAll();
     }
 
+
     private void StartBatteryQuery()
     {
         try
         {
             cancellationTokenSource = new CancellationTokenSource();
-            batteryQueryTask = Task.Run(() => QueryBatteryLoop(cancellationTokenSource.Token));
+            var interval = (int)(GetConfiguration().GetValue(UpdateInterval) * 1000);
+            batteryQueryTask = Task.Run(() => QueryBatteryLoop(cancellationTokenSource.Token, interval));
             Msg("Started battery query task");
         }
         catch (Exception ex)
@@ -59,24 +79,30 @@ public class WiVRnBatteryOSC : ResoniteMod
         }
     }
 
-    private void QueryBatteryLoop(CancellationToken cancellationToken)
+    private void QueryBatteryLoop(CancellationToken cancellationToken, int intervalMs)
     {
-        // Query battery every 2 seconds
+        // Wait a bit for VR_Manager to initialize
+        Thread.Sleep(5000);
+        
+        // Query battery at specified interval
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                // Try to get battery from VR_Manager's headset state
-                // This queries the renderer which should call OpenXR
+                queryCount++;
                 QueryBatteryFromRenderer();
                 
-                // Wait 2 seconds before next query
-                Thread.Sleep(2000);
+                // Wait before next query
+                Thread.Sleep(intervalMs);
             }
             catch (Exception ex)
             {
-                Warn($"Error querying battery: {ex.Message}");
-                Thread.Sleep(2000);
+                lastError = ex.Message;
+                if (GetConfiguration().GetValue(ShowDebugInfo))
+                {
+                    Warn($"Error querying battery (query #{queryCount}): {ex.Message}");
+                }
+                Thread.Sleep(intervalMs);
             }
         }
     }
@@ -85,65 +111,152 @@ public class WiVRnBatteryOSC : ResoniteMod
     {
         try
         {
-            // Get VR_Manager instance using reflection
-            var vrManagerType = typeof(VR_Manager);
-            var instanceField = vrManagerType.GetField("_instance", 
-                BindingFlags.NonPublic | BindingFlags.Static);
+            // Get Engine.Current to access InputInterface
+            var engineType = typeof(Engine);
+            var currentProperty = engineType.GetProperty("Current", 
+                BindingFlags.Public | BindingFlags.Static);
             
-            if (instanceField == null)
+            if (currentProperty == null)
             {
-                // Try alternative field names
-                instanceField = vrManagerType.GetField("Instance", 
-                    BindingFlags.Public | BindingFlags.Static);
+                lastStatusMessage = "Engine.Current property not found";
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                    Warn(lastStatusMessage);
+                return;
             }
             
-            if (instanceField == null) return;
+            var engine = currentProperty.GetValue(null) as Engine;
+            if (engine == null)
+            {
+                lastStatusMessage = "Engine.Current is null";
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                    Warn(lastStatusMessage);
+                return;
+            }
             
-            var vrManager = instanceField.GetValue(null) as VR_Manager;
-            if (vrManager == null) return;
+            // Get InputInterface from Engine
+            var inputInterface = engine.InputInterface;
+            if (inputInterface == null)
+            {
+                lastStatusMessage = "InputInterface is null";
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                    Warn(lastStatusMessage);
+                return;
+            }
+            
+            // Get VR_Manager from InputInterface using reflection
+            var inputInterfaceType = typeof(InputInterface);
+            var vrManagerField = inputInterfaceType.GetField("_vrManager", 
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            
+            if (vrManagerField == null)
+            {
+                lastStatusMessage = "InputInterface._vrManager field not found";
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                    Warn(lastStatusMessage);
+                return;
+            }
+            
+            var vrManager = vrManagerField.GetValue(inputInterface) as VR_Manager;
+            if (vrManager == null)
+            {
+                lastStatusMessage = "VR_Manager is null";
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                    Warn(lastStatusMessage);
+                return;
+            }
             
             // Get headset using reflection
+            var vrManagerType = typeof(VR_Manager);
             var headsetField = vrManagerType.GetField("_headset", 
                 BindingFlags.NonPublic | BindingFlags.Instance);
             
-            if (headsetField == null) return;
+            if (headsetField == null)
+            {
+                lastStatusMessage = "_headset field not found";
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                    Warn(lastStatusMessage);
+                return;
+            }
             
             var headset = headsetField.GetValue(vrManager) as GeneralHeadset;
-            if (headset == null) return;
+            if (headset == null)
+            {
+                lastStatusMessage = "Headset is null";
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                    Warn(lastStatusMessage);
+                return;
+            }
             
             // Try to get battery level from headset
-            // The headset should have queried it from the renderer
             var batteryLevel = headset.BatteryLevel;
             var batteryCharging = headset.BatteryCharging;
             
-            if (batteryLevel != null)
+            if (batteryLevel == null)
             {
-                float level = batteryLevel.Value;
-                bool charging = batteryCharging?.Held ?? false;
+                lastStatusMessage = "BatteryLevel is null";
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                    Warn(lastStatusMessage);
+                return;
+            }
+            
+            float level = batteryLevel.Value;
+            bool charging = batteryCharging?.Held ?? false;
+            
+            // Log what we're getting
+            if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 5 == 0)
+            {
+                Msg($"Query #{queryCount}: BatteryLevel={level}, Charging={charging}, BatteryLevel type={batteryLevel.GetType().Name}");
+            }
+            
+            // Check if we got valid data
+            if (level >= 0f && level <= 1f)
+            {
+                lastBatteryLevel = level;
+                lastBatteryCharging = charging;
+                batteryPresent = true;
+                lastUpdateTime = DateTime.Now;
+                lastError = "";
+                lastStatusMessage = $"Battery: {level * 100:F1}%, Charging: {charging}";
                 
-                // Only update if we got valid data (0.0 to 1.0)
-                if (level >= 0f && level <= 1f)
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
                 {
-                    lastBatteryLevel = level;
-                    lastBatteryCharging = charging;
-                    batteryPresent = true;
-                    
-                    // Log occasionally (every 10 queries = ~20 seconds)
-                    if (DateTime.Now.Second % 20 == 0)
-                    {
-                        Msg($"Battery: {level * 100:F1}%, Charging: {charging}");
-                    }
+                    Msg($"✓ {lastStatusMessage}");
                 }
-                else
+            }
+            else
+            {
+                // Invalid data - battery not available
+                batteryPresent = false;
+                lastStatusMessage = $"Invalid battery level: {level} (expected 0.0-1.0)";
+                if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
                 {
-                    // Invalid data - battery not available
-                    batteryPresent = false;
+                    Warn($"✗ {lastStatusMessage}");
+                }
+            }
+            
+            // Try to force update by calling UpdateValue directly
+            // This might help if the renderer isn't updating it
+            var config = GetConfiguration();
+            if ((batteryPresent && config.GetValue(ForceUpdate)) || (batteryPresent && queryCount % 5 == 0))
+            {
+                try
+                {
+                    batteryLevel.UpdateValue(lastBatteryLevel, 0.016f); // ~60fps delta
+                    batteryCharging?.UpdateState(lastBatteryCharging);
+                }
+                catch (Exception ex)
+                {
+                    if (config.GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                        Warn($"Failed to force update: {ex.Message}");
                 }
             }
         }
         catch (Exception ex)
         {
-            // Silently handle errors - battery might not be available yet
+            lastError = ex.Message;
+            lastStatusMessage = $"Exception: {ex.Message}";
+            if (GetConfiguration().GetValue(ShowDebugInfo) && queryCount % 10 == 0)
+                Warn($"Exception in QueryBatteryFromRenderer: {ex.Message}\n{ex.StackTrace}");
             batteryPresent = false;
         }
     }
@@ -162,7 +275,7 @@ public class WiVRnBatteryOSC : ResoniteMod
     }
 
     // Harmony patch to ensure battery is updated correctly
-    // This patches HandleHeadsetState to ensure battery data flows through
+    // This patches HandleHeadsetState to inject battery data
     [HarmonyPatch(typeof(VR_Manager), "HandleHeadsetState")]
     class VR_Manager_HandleHeadsetState_Patch
     {
