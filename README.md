@@ -34,10 +34,21 @@ Resonite queries battery from OpenXR, but OpenXR doesn't expose battery via a st
 ## Features
 
 - ✅ Direct battery query from OpenXR/VR_Manager
-- ✅ Automatic background polling (every 2 seconds)
+- ✅ Automatic background polling (configurable interval, default 2 seconds)
+- ✅ Controller battery logging (for debugging)
+- ✅ Headset battery logging (for debugging)
+- ✅ Configurable debug logging
 - ✅ No external dependencies
 - ✅ Harmony patch to ensure battery data flows through
 - ✅ Simple installation - just drop the DLL in rml_mods
+
+## Configuration
+
+The mod includes in-game configuration options (accessible via Resonite's mod settings):
+
+- **ShowDebugInfo** (default: `true`) - Enable detailed battery logging
+- **UpdateInterval** (default: `2.0` seconds) - How often to query battery status
+- **ForceUpdate** (default: `false`) - Force update battery values even if renderer provides them
 
 ## Building
 
@@ -48,7 +59,34 @@ dotnet build
 
 The DLL will be automatically copied to your Resonite `rml_mods` folder if `CopyToMods` is enabled in the project file.
 
+## Known Limitations
+
+### Headset Battery (Linux)
+**Issue**: Headset battery shows `-1` (not available) on Linux systems.
+
+**Root Cause**: WiVRn only sends headset battery data on Android (`#ifdef __ANDROID__`). On Linux, the battery sending code is never executed.
+
+**Status**: This is a WiVRn limitation, not a mod limitation. The mod correctly reads what the renderer provides, but WiVRn isn't sending battery data on Linux.
+
+**Solution**: Requires implementing Linux battery support in WiVRn client (see `BATTERY_INVESTIGATION.md` for details).
+
+### Controller Battery (Quest Pro)
+**Issue**: Quest Pro controllers don't expose battery via OpenXR extensions.
+
+**Root Cause**: Quest Pro controllers don't support the OpenXR battery extension (`XR_EXT_controller_battery`), similar to how Steam Link only provides headset battery but not controller battery.
+
+**Status**: This is a hardware/OpenXR limitation, not fixable in software.
+
+**Note**: The mod includes controller battery logging to help verify what data (if any) is available from your controllers.
+
 ## Version History
+
+### v0.1.2
+- Added controller battery logging
+- Added headset battery logging from renderer
+- Improved debug output with raw battery values
+- Added configuration options (ShowDebugInfo, UpdateInterval, ForceUpdate)
+- Created `BATTERY_INVESTIGATION.md` documenting findings
 
 ### v0.1.0
 - Direct battery query from OpenXR/VR_Manager
@@ -58,6 +96,10 @@ The DLL will be automatically copied to your Resonite `rml_mods` folder if `Copy
 
 ### v0.0.1
 - Initial release with OSC support (deprecated)
+
+## Documentation
+
+- **[BATTERY_INVESTIGATION.md](BATTERY_INVESTIGATION.md)** - Detailed investigation of battery data flow, Linux/Android differences, and Quest Pro limitations
 
 ## Credits
 

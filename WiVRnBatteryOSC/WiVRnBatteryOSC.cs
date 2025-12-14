@@ -40,6 +40,9 @@ public class WiVRnBatteryOSC : ResoniteMod
     
     // Static instance for Harmony patch to access
     private static WiVRnBatteryOSC? instance;
+    
+    // Controller logging counter (static for Harmony patch)
+    private static int controllerLogCounter = 0;
 
     public override void OnEngineInit()
     {
@@ -282,12 +285,10 @@ public class WiVRnBatteryOSC : ResoniteMod
             if (instance == null) return;
 
             // Log what the renderer is providing (every 20 calls to avoid spam)
-            // Note: The renderer is providing -1, which means WiVRn isn't sending battery data
-            // This is logged in the main query loop, so we don't need to log here
-            
-            // The renderer is providing -1, which means WiVRn isn't sending battery data
-            // We can't inject fake data, but we can log that we see the issue
-            // The real fix needs to be in WiVRn server or the renderer querying battery
+            if (instance.queryCount % 20 == 0 && instance.GetConfiguration().GetValue(ShowDebugInfo))
+            {
+                ResoniteMod.Msg($"Headset battery from renderer: {state.batteryLevel} (charging: {state.batteryCharging})");
+            }
             
             var batteryState = instance.GetBatteryState();
             
@@ -315,6 +316,36 @@ public class WiVRnBatteryOSC : ResoniteMod
                 catch
                 {
                     // Silently handle errors
+                }
+            }
+        }
+    }
+
+    // Harmony patch to log controller battery status
+    [HarmonyPatch(typeof(VR_Manager), "HandleController", new Type[] { typeof(VR_ControllerState), typeof(float) })]
+    class VR_Manager_HandleController_Patch
+    {
+        static void Postfix(VR_Manager __instance, VR_ControllerState state, float deltaTime)
+        {
+            // Get mod instance
+            if (instance == null) return;
+
+            // Log controller battery (every 50 calls to avoid spam, but log first detection)
+            controllerLogCounter++;
+            
+            if (instance.GetConfiguration().GetValue(ShowDebugInfo))
+            {
+                // Log first time we see a controller, or every 50 calls
+                if (controllerLogCounter == 1 || controllerLogCounter % 50 == 0)
+                {
+                    var side = state.side.ToString();
+                    var deviceID = state.deviceID ?? "unknown";
+                    var batteryLevel = state.batteryLevel;
+                    var batteryCharging = state.batteryCharging;
+                    var isTracking = state.isTracking;
+                    
+                    // Note: Quest Pro controllers don't expose battery via OpenXR, so this will likely show 0% or invalid values
+                    ResoniteMod.Msg($"Controller detected - Side: {side}, ID: {deviceID}, Battery: {batteryLevel * 100:F1}% (raw: {batteryLevel}), Charging: {batteryCharging}, Tracking: {isTracking}");
                 }
             }
         }
